@@ -1,17 +1,20 @@
 package arrowclient
 
-//TODO: Refactoring: arrowheadLocalCloud.RegisterService() ? (contains address and port for request)
-//TODO: Errorhandling
-//TODO: Comments
-
 import (
 	"bytes"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"strconv"
 	"time"
 )
+
+type Localcloud struct {
+	Address string
+	Port    int
+	Debug   bool
+}
 
 //Identifies a Service (An Application) on a System (Computer/Microcontroller) e.g. RPI3-Garden2
 //(IP-)Address, Port: Where is the API of the Device located
@@ -66,7 +69,53 @@ type Cloud struct {
 	Secure               bool   `json:secure,omitempty`
 }
 
-func RegisterService(description ServiceDescription, service Service, serviceUri string, version int, udp bool, ttl int) {
+type OrchestrationFlags struct {
+	OverrideStore          bool `json:"overrideStore,omitempty"`
+	ExternalServiceRequest bool `json:"externalServiceRequest,omitempty"`
+	EnableInterCloud       bool `json:"enableInterCloud,omitempty"`
+	Matchmaking            bool `json:"matchmaking,omitempty"`
+	MetadataSearch         bool `json:"metadataSearch,omitempty"`
+	TriggerInterCloud      bool `json:"triggerInterCloud,omitempty"`
+	PingProviders          bool `json:"pingProviders,omitempty"`
+	//OnlyPreferred          bool `json:"onlyPreferred,omitempty"`
+	//EnableQoS              bool `json:"enableQoS,omitempty"` //not implemented in 4.0
+}
+
+type OrchestrationForm struct {
+	Service     ServiceDescription `json:"serviceDescription"`
+	Provider    Service            `json:"provider"`
+	ServiceURI  string             `json:"serviceURI"`
+	Instruction string             `json:"instruction"`
+	Warnings    []string           `json:"warnings"`
+}
+
+type orchestrationResponse struct {
+	OrchestrationForm []OrchestrationForm `json:"response"`
+}
+
+
+func (l Localcloud) InitializeDatabase() error {
+	service := "serviceregistry"
+	subpath := "mgmt/all"
+	url := "http://" + l.Address + ":" + strconv.Itoa(l.Port) + "/" + service + "/" + subpath
+
+	client := &http.Client{}
+
+	request, err := http.NewRequest("DELETE", url, nil)
+	if err != nil {
+		return err
+	}
+
+	resp, err := client.Do(request)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	return nil
+}
+
+func (l Localcloud) RegisterService(description ServiceDescription, service Service, serviceUri string, version int, udp bool, ttl int) error {
 	p := ServiceRegistryEntry{
 		ProvidedService: description,
 		Provider:        service,
@@ -76,12 +125,17 @@ func RegisterService(description ServiceDescription, service Service, serviceUri
 		Ttl:             ttl,
 	}
 
-	bytearray, _ := json.MarshalIndent(p, "", "\t")
+	bytearray, err := json.MarshalIndent(p, "", "\t")
+	if err != nil {
+		return err
+	}
 
-	arrowheadPOST("serviceregistry", "register", bytearray)
+	_, err = l.arrowheadPOST("serviceregistry", "register", bytearray)
+
+	return err
 }
 
-func RemoveService(description ServiceDescription, service Service, serviceUri string, version int, udp bool, ttl int) {
+func (l Localcloud) RemoveService(description ServiceDescription, service Service, serviceUri string, version int, udp bool, ttl int) error {
 	p := ServiceRegistryEntry{
 		ProvidedService: description,
 		Provider:        service,
@@ -91,12 +145,44 @@ func RemoveService(description ServiceDescription, service Service, serviceUri s
 		Ttl:             ttl,
 	}
 
-	bytearray, _ := json.MarshalIndent(p, "", "\t")
+	bytearray, err := json.MarshalIndent(p, "", "\t")
+	if err != nil {
+		return err
+	}
 
-	arrowheadPUT("serviceregistry", "remove", bytearray)
+	_, err = l.arrowheadPUT("serviceregistry", "remove", bytearray)
+	return err
 }
 
-func Subscribe(eventName string, consumer Service, providers []Service, notifyUri string, matchMetadata bool) {
+func (l Localcloud) RequestService(requester Service, requestedService ServiceDescription, flags OrchestrationFlags) ([]OrchestrationForm, error) {
+	var orchestrationResponse orchestrationResponse
+
+	p := struct {
+		RequesterSystem    Service            `json:"requesterSystem"`
+		RequestedService   ServiceDescription `json:"requestedService"`
+		OrchestrationFlags OrchestrationFlags `json:"orchestrationFlags"`
+		//RequestedQoS       map[string]string  `json:"requestedQoS"`
+		//PreferredProviders []Service          `json:"preferredProviders"`
+	}{
+		RequesterSystem:    requester,
+		RequestedService:   requestedService,
+		OrchestrationFlags: flags,
+	}
+
+	bytearray, _ := json.MarshalIndent(p, "", "\t")
+
+	resp, err := l.arrowheadPOST("orchestrator", "orchestration", bytearray)
+	if err != nil {
+		fmt.Println("RequestService failed:(")
+		return orchestrationResponse.OrchestrationForm, err
+	}
+
+	err = json.Unmarshal(resp, &orchestrationResponse)
+
+	return orchestrationResponse.OrchestrationForm, err
+}
+
+func (l Localcloud) Subscribe(eventName string, consumer Service, providers []Service, notifyUri string, matchMetadata bool) error {
 	p := eventFilter{
 		EventType:     eventName,
 		Consumer:      consumer,
@@ -105,12 +191,16 @@ func Subscribe(eventName string, consumer Service, providers []Service, notifyUr
 		MatchMetadata: matchMetadata,
 	}
 
-	bytearray, _ := json.MarshalIndent(p, "", "\t")
+	bytearray, err := json.MarshalIndent(p, "", "\t")
+	if err != nil {
+		return err
+	}
 
-	arrowheadPOST("eventhandler", "subscription", bytearray)
+	_, err = l.arrowheadPOST("eventhandler", "subscription", bytearray)
+	return err
 }
 
-func Unsubscribe(eventName string, consumer Service, providers []Service, notifyUri string, matchMetadata bool) {
+func (l Localcloud) Unsubscribe(eventName string, consumer Service, providers []Service, notifyUri string, matchMetadata bool) error {
 	p := eventFilter{
 		EventType:     eventName,
 		Consumer:      consumer,
@@ -119,12 +209,16 @@ func Unsubscribe(eventName string, consumer Service, providers []Service, notify
 		MatchMetadata: matchMetadata,
 	}
 
-	bytearray, _ := json.MarshalIndent(p, "", "\t")
+	bytearray, err := json.MarshalIndent(p, "", "\t")
+	if err != nil {
+		return err
+	}
 
-	arrowheadPUT("eventhandler", "subscription", bytearray)
+	_, err = l.arrowheadPUT("eventhandler", "subscription", bytearray)
+	return err
 }
 
-func Publish(eventName string, payload string, source Service, callbackUri string) {
+func (l Localcloud) Publish(eventName string, payload string, source Service, callbackUri string) error {
 	p := struct {
 		Source              Service `json:"source"`
 		Event               event   `json:"event"`
@@ -139,12 +233,16 @@ func Publish(eventName string, payload string, source Service, callbackUri strin
 		DeliveryCompleteUri: callbackUri,
 	}
 
-	bytearray, _ := json.MarshalIndent(p, "", "\t")
+	bytearray, err := json.MarshalIndent(p, "", "\t")
+	if err != nil {
+		return err
+	}
 
-	arrowheadPOST("eventhandler", "publish", bytearray)
+	_, err = l.arrowheadPOST("eventhandler", "publish", bytearray)
+	return err
 }
 
-func AuthorizeIntercloud(otherCloud Cloud, serviceList []ServiceDescription) {
+func (l Localcloud) AuthorizeIntercloud(otherCloud Cloud, serviceList []ServiceDescription) error {
 	p := struct {
 		Cloud       Cloud                `json:"cloud"`
 		ServiceList []ServiceDescription `json:"serviceList"`
@@ -153,12 +251,16 @@ func AuthorizeIntercloud(otherCloud Cloud, serviceList []ServiceDescription) {
 		serviceList,
 	}
 
-	bytearray, _ := json.MarshalIndent(p, "", "\t")
+	bytearray, err := json.MarshalIndent(p, "", "\t")
+	if err != nil {
+		return err
+	}
 
-	arrowheadPOST("authorization", "mgmt/intercloud", bytearray)
+	_, err = l.arrowheadPOST("authorization", "mgmt/intercloud", bytearray)
+	return err
 }
 
-func AuthorizeIntracloud(consumer Service, providers []Service, service ServiceDescription) {
+func (l Localcloud) AuthorizeIntracloud(consumer Service, providers []Service, service ServiceDescription) error {
 	p := struct {
 		Consumer  Service            `json:"consumer"`
 		Providers []Service          `json:"providers"`
@@ -169,13 +271,17 @@ func AuthorizeIntracloud(consumer Service, providers []Service, service ServiceD
 		Service:   service,
 	}
 
-	bytearray, _ := json.MarshalIndent(p, "", "\t")
+	bytearray, err := json.MarshalIndent(p, "", "\t")
+	if err != nil {
+		return err
+	}
 
-	arrowheadPOST("authorization", "mgmt/intracloud", bytearray)
+	_, err = l.arrowheadPOST("authorization", "mgmt/intracloud", bytearray)
+	return err
 }
 
-func arrowheadPOST(service string, subpath string, payload []byte) error {
-	url := "http://172.18.0.3:8440/" + service + "/" + subpath
+func (l Localcloud) arrowheadPOST(service string, subpath string, payload []byte) ([]byte, error) {
+	url := "http://" + l.Address + ":" + strconv.Itoa(l.Port) + "/" + service + "/" + subpath
 
 	fmt.Println(url)
 	fmt.Println(string(payload))
@@ -183,21 +289,23 @@ func arrowheadPOST(service string, subpath string, payload []byte) error {
 	resp, err := http.Post(url, "application/json", bytes.NewReader(payload))
 
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	body, err := ioutil.ReadAll(resp.Body)
-	fmt.Println("*********************************************")
-	fmt.Println(string(body))
-	fmt.Println("*********************************************")
 
-	//return err
-	return nil
+	if l.Debug {
+		fmt.Println("************************PUT******************")
+		fmt.Println(string(body))
+		fmt.Println("*********************************************")
+	}
+
+	return body, nil
 }
 
-func arrowheadPUT(service string, subpath string, payload []byte) error {
-	url := "http://172.18.0.3:8440/" + service + "/" + subpath
+func (l Localcloud) arrowheadPUT(service string, subpath string, payload []byte) ([]byte, error) {
+	url := "http://" + l.Address + ":" + strconv.Itoa(l.Port) + "/" + service + "/" + subpath
 
 	fmt.Println(url)
 	fmt.Println(string(payload))
@@ -211,15 +319,22 @@ func arrowheadPUT(service string, subpath string, payload []byte) error {
 	resp, err := client.Do(request)
 
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	body, err := ioutil.ReadAll(resp.Body)
-	fmt.Println("*********************************************")
-	fmt.Println(string(body))
-	fmt.Println("*********************************************")
+	if err != nil {
+		return nil, err
+	}
 
-	//return err
-	return nil
+	if l.Debug {
+		fmt.Println("*********************************************")
+		fmt.Println(string(body))
+		fmt.Println("*********************************************")
+	}
+
+	return body, nil
 }
+
+
