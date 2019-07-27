@@ -93,7 +93,6 @@ type orchestrationResponse struct {
 	OrchestrationForm []OrchestrationForm `json:"response"`
 }
 
-
 func (l Localcloud) InitializeDatabase() error {
 	service := "serviceregistry"
 	subpath := "mgmt/all"
@@ -173,8 +172,7 @@ func (l Localcloud) RequestService(requester Service, requestedService ServiceDe
 
 	resp, err := l.arrowheadPOST("orchestrator", "orchestration", bytearray)
 	if err != nil {
-		fmt.Println("RequestService failed:(")
-		return orchestrationResponse.OrchestrationForm, err
+		return orchestrationResponse.OrchestrationForm, fmt.Errorf("RequestService failed: %s\n", err)
 	}
 
 	err = json.Unmarshal(resp, &orchestrationResponse)
@@ -283,8 +281,10 @@ func (l Localcloud) AuthorizeIntracloud(consumer Service, providers []Service, s
 func (l Localcloud) arrowheadPOST(service string, subpath string, payload []byte) ([]byte, error) {
 	url := "http://" + l.Address + ":" + strconv.Itoa(l.Port) + "/" + service + "/" + subpath
 
-	fmt.Println(url)
-	fmt.Println(string(payload))
+	if l.Debug {
+		fmt.Println(url)
+		fmt.Println(string(payload))
+	}
 
 	resp, err := http.Post(url, "application/json", bytes.NewReader(payload))
 
@@ -307,8 +307,10 @@ func (l Localcloud) arrowheadPOST(service string, subpath string, payload []byte
 func (l Localcloud) arrowheadPUT(service string, subpath string, payload []byte) ([]byte, error) {
 	url := "http://" + l.Address + ":" + strconv.Itoa(l.Port) + "/" + service + "/" + subpath
 
-	fmt.Println(url)
-	fmt.Println(string(payload))
+	if l.Debug {
+		fmt.Println(url)
+		fmt.Println(string(payload))
+	}
 
 	client := &http.Client{}
 
@@ -336,5 +338,3 @@ func (l Localcloud) arrowheadPUT(service string, subpath string, payload []byte)
 
 	return body, nil
 }
-
-
