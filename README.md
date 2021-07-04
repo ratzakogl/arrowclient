@@ -8,7 +8,7 @@ This Arrowhead Client Library covers all communication with the Arrowhead Core F
 #### Import arrowclient 
 ```go
 import (
-	influx "github.com/ratzakogl/arrowclient"
+	arrowclient "github.com/ratzakogl/arrowclient"
 )
 ```
 
